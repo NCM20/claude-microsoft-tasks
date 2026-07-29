@@ -8,6 +8,21 @@ independently: a Worker fix reaches users on deploy with no plugin update, and a
 skill change reaches them on plugin update with no deploy. Each entry below says
 which half moved.
 
+## [0.2.1] - 2026-07-29
+
+### Fixed
+
+- **Entra / scripts**: register `https://claude.ai/api/mcp/auth_callback` as a
+  Web redirect URI. Cowork does not run a loopback listener; it brokers OAuth
+  through a hosted callback on claude.ai, so the `callbackPort` in a plugin's
+  `.mcp.json` is a Claude Code concept that Cowork ignores. Without this,
+  sign-in fails with `AADSTS50011`.
+
+  It must be Web rather than Single-page application: claude.ai exchanges the
+  code server-side, and Entra rejects non-CORS token requests against
+  SPA-registered URIs with `AADSTS9002327`. The localhost URIs are kept for
+  Claude Code, which does use a loopback listener.
+
 ## [0.2.0] - 2026-07-29
 
 First version that can actually connect.

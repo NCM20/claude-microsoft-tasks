@@ -6,10 +6,20 @@ token along with every request. One registration serves the whole tenant.
 
 ## What you are creating
 
-A **public client** application using authorization code flow with PKCE. Public
-client means no client secret, which is correct here: the client is a desktop
-app on each user's machine, and a secret shipped to every desktop is not a
-secret.
+A **public client** application using authorization code flow with PKCE, and no
+client secret at all.
+
+Public client is correct here even though Cowork brokers the OAuth exchange
+through claude.ai rather than from each user's machine. The client identity is
+handed out by this Worker's `/register` endpoint to anyone who asks, because
+Entra has no dynamic client registration and Cowork refuses to connect without
+it. A secret distributed that way would not be a secret. PKCE is what actually
+binds an authorization request to the client that made it, and it does that job
+without one.
+
+Consequently, do not add a client secret later "to be safe". It would convert
+the app to a confidential client and Entra would then demand it on every token
+exchange, which is the one thing the flow cannot supply.
 
 ## Permissions
 
@@ -50,20 +60,35 @@ working. See [Running without directory lookup](#running-without-directory-looku
    matters.
 5. Register, then copy the **Application (client) ID** and **Directory (tenant)
    ID**. You need both.
-6. → **Authentication** → Add a platform → **Mobile and desktop applications**.
-   Add these redirect URIs:
+6. → **Authentication** → Add a platform → **Web**. Add:
+   - `https://claude.ai/api/mcp/auth_callback`
+
+   This is the one that matters for Cowork. Cowork does not run a loopback
+   listener; it brokers OAuth through a hosted callback on claude.ai, so the
+   `callbackPort` in a plugin's `.mcp.json` is a Claude Code concept that Cowork
+   ignores entirely.
+
+   It has to be **Web**, not **Single-page application**. claude.ai exchanges
+   the authorization code server-side, and Entra rejects non-CORS token requests
+   against SPA-registered URIs with `AADSTS9002327`. Because the app has no
+   client secret, it stays a public client and PKCE alone authenticates the
+   exchange.
+
+7. → Add a platform → **Mobile and desktop applications**, for Claude Code,
+   which does use a loopback listener. Add:
    - `http://localhost/callback`
    - `http://localhost`
 
-   For public client apps, Entra ignores the port on `http://localhost` redirect
-   URIs, so you do not need to match Cowork's callback port. It does **not**
-   ignore the path, which is why both variants are registered. If sign-in fails
-   with `AADSTS50011`, the error text names the exact URI Cowork sent; add that
-   one and the problem goes away.
-7. Confirm **Allow public client flows** is set to **Yes** on the same page.
-8. → **API permissions** → Add a permission → Microsoft Graph → Delegated
+   Entra ignores the port on `http://localhost` for public clients but not the
+   path, which is why both variants are registered. Skip this step if you only
+   care about Cowork.
+
+   If sign-in fails with `AADSTS50011`, the error text names the exact URI that
+   was sent. Add that one and the problem goes away.
+8. Confirm **Allow public client flows** is set to **Yes** on the same page.
+9. → **API permissions** → Add a permission → Microsoft Graph → Delegated
    permissions. Add the five from the table above.
-9. → **Grant admin consent for _your tenant_**. Confirm every row shows
+10. → **Grant admin consent for _your tenant_**. Confirm every row shows
    "Granted".
 
 Do not create a client secret. If one exists, the app is a confidential client
