@@ -23,8 +23,20 @@ SCOPES=(
   "offline_access"
 )
 
-# Entra ignores the port on localhost redirect URIs for public clients, but not
-# the path, so both shapes are registered.
+# Cowork does not use a loopback listener. It brokers OAuth through a hosted
+# callback on claude.ai, so the `callbackPort` in a plugin's .mcp.json is a
+# Claude Code concept that Cowork ignores. This must be registered as a Web
+# redirect URI rather than a SPA one: claude.ai exchanges the code server-side,
+# and Entra rejects non-CORS token requests against SPA-registered URIs with
+# AADSTS9002327. No client secret is created, so the app stays a public client
+# and PKCE alone authenticates the exchange.
+WEB_REDIRECT_URIS=(
+  "https://claude.ai/api/mcp/auth_callback"
+)
+
+# For Claude Code, which does use a loopback listener. Entra ignores the port on
+# localhost redirect URIs for public clients, but not the path, so both shapes
+# are registered.
 REDIRECT_URIS=(
   "http://localhost/callback"
   "http://localhost"
@@ -68,6 +80,7 @@ APP_ID="$(az ad app create \
   --sign-in-audience AzureADMyOrg \
   --is-fallback-public-client true \
   --public-client-redirect-uris "${REDIRECT_URIS[@]}" \
+  --web-redirect-uris "${WEB_REDIRECT_URIS[@]}" \
   --required-resource-accesses "@${MANIFEST}" \
   --query appId -o tsv)"
 
