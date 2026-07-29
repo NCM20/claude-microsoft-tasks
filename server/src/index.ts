@@ -14,6 +14,8 @@ import {
   corsHeaders,
   decodeClaims,
   extractBearer,
+  handleAuthorize,
+  handleToken,
   protectedResourceMetadata,
   readClientRegistration,
   registerClient,
@@ -45,6 +47,22 @@ export default {
       url.pathname.startsWith('/.well-known/openid-configuration')
     ) {
       return json(await authorizationServerMetadata(url, env));
+    }
+
+    // The authorization server proper. These exist so that issuer,
+    // authorization_endpoint, token_endpoint, and registration_endpoint are all
+    // one origin, which is what makes the metadata conformant and believable.
+    if (url.pathname === '/authorize') {
+      return handleAuthorize(url, env);
+    }
+
+    if (url.pathname === '/token') {
+      if (request.method !== 'POST') {
+        return json({ error: 'method_not_allowed', message: 'Use POST to exchange a code.' }, 405, {
+          allow: 'POST, OPTIONS',
+        });
+      }
+      return handleToken(request, env);
     }
 
     // RFC 7591. Answers with the one pre-registered public client; see

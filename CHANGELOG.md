@@ -8,6 +8,40 @@ independently: a Worker fix reaches users on deploy with no plugin update, and a
 skill change reaches them on plugin update with no deploy. Each entry below says
 which half moved.
 
+## Worker 0.3.0 - 2026-07-29
+
+The Worker is now a full OAuth authorization server proxy rather than only a
+metadata host. Plugin unchanged.
+
+### Added
+
+- **Worker**: `/authorize` and `/token`, proxying Entra. Combined with the
+  existing `/register`, every endpoint the metadata advertises is now the same
+  origin as its `issuer`.
+
+  This was the fix for the connector that authorized successfully and then went
+  quiet. Entra granted four valid Graph tokens; Cowork attached none of them.
+  Serving metadata that claims one issuer while pointing `authorization_endpoint`
+  at a foreign host is the shape of a mix-up attack, and a careful client that
+  completes such a flow cannot reconcile the token it receives with the
+  authorization server it recorded.
+
+  PKCE passes through untouched and the authorization code goes straight from
+  Entra to the client's redirect URI, so the proxy never handles a credential.
+  `resource` (RFC 8707) is dropped, since Entra predates it and derives the
+  audience from scopes instead. Scopes are rewritten to the fully qualified
+  Graph ones when a client asks for anything else, because only those produce a
+  token Graph will accept.
+
+- **Worker**: RFC 7592 `registration_client_uri` and `registration_access_token`,
+  plus `GET /register/{client_id}`. Without them a client has no way to confirm
+  a registration still exists, and Cowork re-registered on every attempt.
+
+- **Worker**: structured logging for the whole handshake, covering authorize,
+  token grant outcomes, registration, and whether an inbound Authorization
+  header was absent or merely unparseable. Tokens are never logged. This is what
+  made the diagnosis possible.
+
 ## [0.2.1] - 2026-07-29
 
 ### Fixed

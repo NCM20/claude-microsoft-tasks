@@ -121,6 +121,28 @@ interface EntraOpenIdConfiguration {
 }
 
 /**
+ * Entra's real endpoints, read from its OpenID configuration so national clouds
+ * and any future change are picked up without a redeploy.
+ */
+async function entraConfig(env: Env): Promise<Required<Pick<EntraOpenIdConfiguration, 'authorization_endpoint' | 'token_endpoint'>> & EntraOpenIdConfiguration> {
+  const tenant = `${loginBase(env)}/${env.TENANT_ID}`;
+  let upstream: EntraOpenIdConfiguration = {};
+  try {
+    const response = await fetch(`${tenant}/v2.0/.well-known/openid-configuration`, {
+      cf: { cacheTtl: 3600, cacheEverything: true },
+    } as RequestInit);
+    if (response.ok) upstream = (await response.json()) as EntraOpenIdConfiguration;
+  } catch {
+    // Fall through to the constructed endpoints below.
+  }
+  return {
+    ...upstream,
+    authorization_endpoint: upstream.authorization_endpoint ?? `${tenant}/oauth2/v2.0/authorize`,
+    token_endpoint: upstream.token_endpoint ?? `${tenant}/oauth2/v2.0/token`,
+  };
+}
+
+/**
  * RFC 8414 authorization server metadata, derived from Entra's own OpenID
  * configuration so that national clouds and any future endpoint changes are
  * picked up without a redeploy.
@@ -132,23 +154,17 @@ interface EntraOpenIdConfiguration {
  */
 export async function authorizationServerMetadata(requestUrl: URL, env: Env) {
   const origin = `${requestUrl.protocol}//${requestUrl.host}`;
-  const tenant = `${loginBase(env)}/${env.TENANT_ID}`;
-
-  let upstream: EntraOpenIdConfiguration = {};
-  try {
-    const response = await fetch(`${tenant}/v2.0/.well-known/openid-configuration`, {
-      // Entra's discovery document is effectively static; cache it at the edge.
-      cf: { cacheTtl: 3600, cacheEverything: true },
-    } as RequestInit);
-    if (response.ok) upstream = (await response.json()) as EntraOpenIdConfiguration;
-  } catch {
-    // Fall through to the constructed endpoints below.
-  }
+  const upstream = await entraConfig(env);
 
   return {
     issuer: origin,
-    authorization_endpoint: upstream.authorization_endpoint ?? `${tenant}/oauth2/v2.0/authorize`,
-    token_endpoint: upstream.token_endpoint ?? `${tenant}/oauth2/v2.0/token`,
+    // Our own endpoints, not Entra's. Advertising foreign endpoints under our
+    // own issuer is the shape of a mix-up attack, and a careful client that
+    // completes such a flow cannot reconcile the token it receives with the
+    // authorization server it recorded. Entra granted four valid tokens that
+    // Cowork then discarded before this became a proxy.
+    authorization_endpoint: `${origin}/authorize`,
+    token_endpoint: `${origin}/token`,
     scopes_supported: [...REQUIRED_SCOPES],
     response_types_supported: ['code'],
     response_modes_supported: upstream.response_modes_supported ?? ['query', 'fragment', 'form_post'],
@@ -163,6 +179,120 @@ export async function authorizationServerMetadata(requestUrl: URL, env: Env) {
     registration_endpoint: `${origin}/register`,
     service_documentation: 'https://github.com/NCM20/claude-microsoft-tasks#readme',
   };
+}
+
+/**
+ * Parameters we refuse to forward to Entra.
+ *
+ * `resource` is RFC 8707, which the MCP spec mandates clients send. Entra
+ * predates it and does not implement it; the audience is determined by the
+ * scopes instead. Forwarding it achieves nothing and risks Entra rejecting the
+ * request outright.
+ */
+const DROPPED_PARAMS = new Set(['resource']);
+
+/**
+ * Authorization endpoint. Redirects to Entra, having pinned the client ID and
+ * ensured the scopes actually name Microsoft Graph.
+ *
+ * Everything else, PKCE challenge included, passes through untouched. The
+ * proxy never sees a credential and cannot weaken the exchange: the code goes
+ * straight from Entra to the client's redirect URI without passing through here.
+ */
+export async function handleAuthorize(requestUrl: URL, env: Env): Promise<Response> {
+  if (!env.ENTRA_CLIENT_ID) {
+    return new Response('This server has no ENTRA_CLIENT_ID configured.', { status: 500 });
+  }
+
+  const upstream = await entraConfig(env);
+  const target = new URL(upstream.authorization_endpoint);
+
+  for (const [key, value] of requestUrl.searchParams) {
+    if (!DROPPED_PARAMS.has(key)) target.searchParams.set(key, value);
+  }
+  target.searchParams.set('client_id', env.ENTRA_CLIENT_ID);
+
+  // A token is only useful to us if Entra audiences it for Graph, which happens
+  // when the scopes are the fully qualified Graph ones. A client that asks for
+  // bare names, or for nothing, would otherwise get a token we cannot use.
+  const scope = requestUrl.searchParams.get('scope') ?? '';
+  if (!scope.includes('graph.microsoft.com')) {
+    target.searchParams.set('scope', REQUIRED_SCOPES.join(' '));
+  }
+
+  console.log(
+    JSON.stringify({
+      event: 'authorize',
+      redirect_uri: requestUrl.searchParams.get('redirect_uri'),
+      scope_rewritten: !scope.includes('graph.microsoft.com'),
+      has_pkce: requestUrl.searchParams.has('code_challenge'),
+    }),
+  );
+
+  return Response.redirect(target.toString(), 302);
+}
+
+/**
+ * Token endpoint. Forwards the exchange to Entra and returns its response
+ * verbatim, so refresh works the same way without further help.
+ */
+export async function handleToken(request: Request, env: Env): Promise<Response> {
+  if (!env.ENTRA_CLIENT_ID) {
+    return new Response(JSON.stringify({ error: 'server_error' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json', ...corsHeaders() },
+    });
+  }
+
+  const params = new URLSearchParams();
+  const contentType = request.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(body)) {
+      if (!DROPPED_PARAMS.has(key) && value != null) params.set(key, String(value));
+    }
+  } else {
+    const form = await request.formData().catch(() => new FormData());
+    for (const [key, value] of form) {
+      if (!DROPPED_PARAMS.has(key)) params.set(key, String(value));
+    }
+  }
+  params.set('client_id', env.ENTRA_CLIENT_ID);
+
+  const upstream = await entraConfig(env);
+  const response = await fetch(upstream.token_endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: params,
+  });
+
+  const text = await response.text();
+
+  // Log the outcome, never the tokens. A failure here is otherwise invisible:
+  // the client just goes quiet.
+  let summary: Record<string, unknown> = { event: 'token', status: response.status };
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    summary = response.ok
+      ? {
+          ...summary,
+          granted: true,
+          grant_type: params.get('grant_type'),
+          token_type: parsed.token_type,
+          expires_in: parsed.expires_in,
+          has_refresh_token: Boolean(parsed.refresh_token),
+          scope: parsed.scope,
+        }
+      : { ...summary, granted: false, error: parsed.error, description: String(parsed.error_description ?? '').slice(0, 200) };
+  } catch {
+    summary = { ...summary, granted: false, note: 'non-JSON response from Entra' };
+  }
+  console.log(JSON.stringify(summary));
+
+  return new Response(text, {
+    status: response.status,
+    headers: { 'content-type': 'application/json', ...corsHeaders() },
+  });
 }
 
 /**
