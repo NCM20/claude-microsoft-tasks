@@ -279,20 +279,44 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   }
   params.set('client_id', env.ENTRA_CLIENT_ID);
 
-  // The Cowork callback is registered under Entra's Web platform, which makes
-  // this a confidential client, so Entra rejects an unauthenticated exchange
-  // with AADSTS7000218. The secret is added here and never leaves the Worker;
-  // the caller stays a public client and never sees it.
-  if (env.ENTRA_CLIENT_SECRET) params.set('client_secret', env.ENTRA_CLIENT_SECRET);
+  /*
+   * One app registration serves two client types with opposite requirements.
+   *
+   * Cowork redirects to https://claude.ai/api/mcp/auth_callback, registered
+   * under Entra's Web platform, which makes it a confidential client: omit the
+   * secret and Entra answers AADSTS7000218.
+   *
+   * Claude Code redirects to http://localhost:<port>/callback, registered under
+   * Mobile and desktop applications, which is a public client: send the secret
+   * and Entra answers AADSTS700025.
+   *
+   * The redirect URI tells us which we are dealing with, but a refresh_token
+   * grant carries no redirect URI at all. So we guess from what we have and let
+   * Entra correct us, retrying once when it says the secret was the problem.
+   */
+  const redirectUri = params.get('redirect_uri') ?? '';
+  const isLoopback = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(redirectUri);
+  const withSecret = Boolean(env.ENTRA_CLIENT_SECRET) && !isLoopback;
 
   const upstream = await entraConfig(env);
-  const response = await fetch(upstream.token_endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: params,
-  });
+  let response = await postToken(upstream.token_endpoint, params, withSecret, env);
+  let text = await response.text();
 
-  const text = await response.text();
+  if (!response.ok) {
+    const wantsSecret = text.includes('AADSTS7000218');
+    const rejectsSecret = text.includes('AADSTS700025');
+    if (wantsSecret || rejectsSecret) {
+      console.log(
+        JSON.stringify({
+          event: 'token_retry',
+          reason: wantsSecret ? 'AADSTS7000218 wants client authentication' : 'AADSTS700025 rejects client authentication',
+          retrying_with_secret: wantsSecret,
+        }),
+      );
+      response = await postToken(upstream.token_endpoint, params, wantsSecret, env);
+      text = await response.text();
+    }
+  }
 
   // Log the outcome, never the tokens. A failure here is otherwise invisible:
   // the client just goes quiet.
@@ -318,6 +342,26 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   return new Response(text, {
     status: response.status,
     headers: { 'content-type': 'application/json', ...corsHeaders() },
+  });
+}
+
+/** One attempt at the token endpoint, with or without client authentication. */
+async function postToken(
+  endpoint: string,
+  params: URLSearchParams,
+  withSecret: boolean,
+  env: Env,
+): Promise<Response> {
+  const body = new URLSearchParams(params);
+  if (withSecret && env.ENTRA_CLIENT_SECRET) {
+    body.set('client_secret', env.ENTRA_CLIENT_SECRET);
+  } else {
+    body.delete('client_secret');
+  }
+  return fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body,
   });
 }
 

@@ -51,10 +51,14 @@ export function optionalStringArray(args: Record<string, unknown>, key: string):
 /**
  * Normalise a user-supplied date into the ISO 8601 UTC string Graph expects.
  *
- * A bare `YYYY-MM-DD` is anchored at midday UTC rather than midnight. Planner
- * and To Do store the instant verbatim and clients render it in local time, so
- * a midnight-UTC due date displays as the *previous* day for anyone west of
- * UTC. Midday keeps the calendar date intact across every populated timezone.
+ * A bare `YYYY-MM-DD` is anchored at midday UTC rather than midnight, so that a
+ * due date cannot render as the *previous* day for anyone west of UTC.
+ *
+ * Verified against a live tenant: Microsoft To Do ignores the time entirely and
+ * normalises to midnight UTC, so the anchor is inert there and the calendar date
+ * survives either way. It is kept for Planner, which stores the instant it is
+ * given. Planner's rendering has not been verified, so this remains a
+ * precaution rather than a measured fix.
  */
 export function toGraphDateTime(value: string, field: string): string {
   const trimmed = value.trim();

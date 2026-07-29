@@ -8,6 +8,41 @@ independently: a Worker fix reaches users on deploy with no plugin update, and a
 skill change reaches them on plugin update with no deploy. Each entry below says
 which half moved.
 
+## Worker 0.5.0 - 2026-07-29
+
+First version proven working end to end against a live tenant, via Claude Code.
+
+### Fixed
+
+- **Worker**: decide client authentication per request instead of always sending
+  the secret. One app registration now serves two client types with opposite
+  requirements: Cowork's `claude.ai` callback is registered under Entra's Web
+  platform and is confidential, so omitting the secret returns `AADSTS7000218`;
+  Claude Code's `http://localhost:<port>/callback` is registered under Mobile
+  and desktop applications and is public, so sending the secret returns
+  `AADSTS700025`.
+
+  The redirect URI distinguishes them, but a `refresh_token` grant carries none,
+  so the proxy infers from what it has and retries once when Entra names the
+  secret as the problem in either direction.
+
+### Verified
+
+Whole chain exercised against the real tenant through Claude Code, which uses
+the same Worker, proxy, secret handling, and app registration as Cowork:
+
+- Token exchange granted, with a refresh token, carrying `Tasks.ReadWrite`.
+- MCP requests arrive with `aud: https://graph.microsoft.com`.
+- Reads: `whoami`, `todo_list_lists`, `todo_my_tasks` across lists,
+  `planner_list_plans` (10 real plans), `planner_list_tasks`.
+- Writes: create, add checklist steps, tick a step, complete, delete.
+
+### Changed
+
+- **Worker**: corrected the reasoning on due-date anchoring. Microsoft To Do
+  ignores the time and normalises to midnight UTC, so the midday anchor is inert
+  there. It is kept for Planner, whose rendering remains unverified.
+
 ## Worker 0.4.0 - 2026-07-29
 
 Everything here was found by driving the real Cowork client against a real

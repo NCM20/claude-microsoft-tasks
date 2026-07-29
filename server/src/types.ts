@@ -72,7 +72,7 @@ export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11
 export const SERVER_INFO = {
   name: 'microsoft-tasks',
   title: 'Microsoft Planner & To Do',
-  version: '0.4.0',
+  version: '0.5.0',
 } as const;
 
 // --- JSON-RPC 2.0 ---
