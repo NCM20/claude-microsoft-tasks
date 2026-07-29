@@ -10,19 +10,24 @@ Microsoft account can see, and nothing else.
 
 Takes about five minutes, once.
 
-1. Open Claude and go to **Customize** in the sidebar, then **Plugins**.
-2. Click **Add marketplace** and enter:
+**Use Claude in your browser at [claude.ai](https://claude.ai), not the desktop
+app.** The desktop app can't reach our plugin catalogue. Everything below
+assumes the browser.
+
+1. Sign in at [claude.ai](https://claude.ai) and open **Cowork**.
+2. Go to **Customize** in the sidebar, then **Plugins**.
+3. Click **Add marketplace** and enter:
 
    ```
    NCM20/claude-microsoft-tasks
    ```
 
-3. Find **microsoft-tasks** in the list and click **Install**.
-4. Click **Connect** and sign in with your NCM account.
-5. Ask it *"What's on my plate this week?"* to check it worked.
+4. Find **microsoft-tasks** in the list and click **Install**.
+5. Click **Connect** and sign in with your NCM account.
+6. Ask it *"What's on my plate this week?"* to check it worked.
 
-If step 2 says the repository isn't accessible, use claude.ai in a browser
-rather than the desktop app. Same account, same plugin.
+You only do this once. After that the plugin is there every time you open
+Cowork in the browser.
 
 ## What the sign-in asks for
 
@@ -88,6 +93,10 @@ Four things it genuinely can't do, and it will say so rather than improvise:
 - See anyone else's To Do lists. Only Planner is shared
 
 ## When something looks wrong
+
+**You can't find the plugin, or adding the marketplace fails.** You're most
+likely in the desktop app. Use [claude.ai](https://claude.ai) in a browser
+instead.
 
 **It says it isn't connected.** Open the plugin under Customize → Plugins and
 click Connect. Sign-ins expire.
