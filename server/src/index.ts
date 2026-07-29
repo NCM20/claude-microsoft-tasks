@@ -14,7 +14,10 @@ import {
   corsHeaders,
   decodeClaims,
   extractBearer,
+  handleAuthorize,
+  handleToken,
   protectedResourceMetadata,
+  readClientRegistration,
   registerClient,
   unauthorized,
 } from './auth';
@@ -46,6 +49,22 @@ export default {
       return json(await authorizationServerMetadata(url, env));
     }
 
+    // The authorization server proper. These exist so that issuer,
+    // authorization_endpoint, token_endpoint, and registration_endpoint are all
+    // one origin, which is what makes the metadata conformant and believable.
+    if (url.pathname === '/authorize') {
+      return handleAuthorize(url, env);
+    }
+
+    if (url.pathname === '/token') {
+      if (request.method !== 'POST') {
+        return json({ error: 'method_not_allowed', message: 'Use POST to exchange a code.' }, 405, {
+          allow: 'POST, OPTIONS',
+        });
+      }
+      return handleToken(request, env);
+    }
+
     // RFC 7591. Answers with the one pre-registered public client; see
     // registerClient for why this exists at all.
     if (url.pathname === '/register') {
@@ -55,6 +74,12 @@ export default {
         });
       }
       return registerClient(request, env);
+    }
+
+    // RFC 7592 read of a registration, so a client can confirm it still exists
+    // rather than assuming it failed and registering again.
+    if (url.pathname.startsWith('/register/')) {
+      return readClientRegistration(request, env, url.pathname.slice('/register/'.length));
     }
 
     if (url.pathname === '/health') {
@@ -85,9 +110,40 @@ export default {
     let token: string;
     try {
       token = extractBearer(request);
-      assertTenantAllowed(decodeClaims(token), env);
+      const claims = decodeClaims(token);
+      assertTenantAllowed(claims, env);
+
+      // Log the token's shape, never its contents. The audience and scopes are
+      // what determine whether Graph will accept it, and getting either wrong
+      // produces an opaque 401 from Graph that is otherwise unattributable.
+      console.log(
+        JSON.stringify({
+          event: 'mcp_request',
+          aud: claims.aud,
+          audience_is_graph:
+            claims.aud === 'https://graph.microsoft.com' ||
+            claims.aud === '00000003-0000-0000-c000-000000000000',
+          scopes: claims.scp?.split(' ') ?? [],
+          has_tasks_scope: (claims.scp ?? '').includes('Tasks.'),
+          user: claims.upn ?? claims.preferred_username,
+          tenant: claims.tid,
+        }),
+      );
     } catch (error) {
       const authError = error instanceof AuthError ? error : new AuthError('Authentication failed');
+      // Log which headers arrived, and the *shape* of any Authorization header,
+      // never its value. Distinguishing "absent" from "present but unparseable"
+      // is the difference between a client that has no token and one that has
+      // a token it is sending wrongly.
+      const authHeader = request.headers.get('authorization');
+      console.log(
+        JSON.stringify({
+          event: 'mcp_unauthorized',
+          reason: authError.message,
+          authorization_header: authHeader === null ? 'absent' : `present, ${authHeader.length} chars, starts "${authHeader.slice(0, 7)}"`,
+          headers_received: [...request.headers.keys()].sort(),
+        }),
+      );
       return unauthorized(url, env, authError);
     }
 
@@ -102,6 +158,7 @@ export default {
     const ctx = { graph: new GraphClient(token, env), env };
 
     try {
+      console.log(JSON.stringify({ event: 'rpc', method: rpc.method }));
       const response = await handleRpc(rpc, ctx);
       // Notifications get an acknowledgement with no body.
       if (response === null) {

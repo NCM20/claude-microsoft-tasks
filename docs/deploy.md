@@ -25,6 +25,19 @@ Actions**:
 | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID, from the Workers dashboard sidebar |
 | `ENTRA_TENANT_ID` | The directory (tenant) ID from [Entra app registration](entra-app-setup.md) |
 
+Separately, the Worker needs the Entra client secret. This is a **Worker**
+secret, not a GitHub one, because the Worker uses it at runtime to authenticate
+the token exchange:
+
+```bash
+cd server && npx wrangler secret put ENTRA_CLIENT_SECRET
+```
+
+Worker secrets persist across deploys, so this is a one-time step that CI never
+touches. Without it the OAuth flow completes at Microsoft and then fails at the
+token exchange with `AADSTS7000218`, which surfaces as a connector that simply
+will not connect.
+
 Optionally add a repository **variable** (not a secret) named `WORKER_URL`, set
 to the deployed origin. The workflow then smoke-tests `/health` after each
 deploy instead of assuming success.

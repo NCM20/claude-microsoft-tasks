@@ -121,6 +121,28 @@ interface EntraOpenIdConfiguration {
 }
 
 /**
+ * Entra's real endpoints, read from its OpenID configuration so national clouds
+ * and any future change are picked up without a redeploy.
+ */
+async function entraConfig(env: Env): Promise<Required<Pick<EntraOpenIdConfiguration, 'authorization_endpoint' | 'token_endpoint'>> & EntraOpenIdConfiguration> {
+  const tenant = `${loginBase(env)}/${env.TENANT_ID}`;
+  let upstream: EntraOpenIdConfiguration = {};
+  try {
+    const response = await fetch(`${tenant}/v2.0/.well-known/openid-configuration`, {
+      cf: { cacheTtl: 3600, cacheEverything: true },
+    } as RequestInit);
+    if (response.ok) upstream = (await response.json()) as EntraOpenIdConfiguration;
+  } catch {
+    // Fall through to the constructed endpoints below.
+  }
+  return {
+    ...upstream,
+    authorization_endpoint: upstream.authorization_endpoint ?? `${tenant}/oauth2/v2.0/authorize`,
+    token_endpoint: upstream.token_endpoint ?? `${tenant}/oauth2/v2.0/token`,
+  };
+}
+
+/**
  * RFC 8414 authorization server metadata, derived from Entra's own OpenID
  * configuration so that national clouds and any future endpoint changes are
  * picked up without a redeploy.
@@ -132,23 +154,17 @@ interface EntraOpenIdConfiguration {
  */
 export async function authorizationServerMetadata(requestUrl: URL, env: Env) {
   const origin = `${requestUrl.protocol}//${requestUrl.host}`;
-  const tenant = `${loginBase(env)}/${env.TENANT_ID}`;
-
-  let upstream: EntraOpenIdConfiguration = {};
-  try {
-    const response = await fetch(`${tenant}/v2.0/.well-known/openid-configuration`, {
-      // Entra's discovery document is effectively static; cache it at the edge.
-      cf: { cacheTtl: 3600, cacheEverything: true },
-    } as RequestInit);
-    if (response.ok) upstream = (await response.json()) as EntraOpenIdConfiguration;
-  } catch {
-    // Fall through to the constructed endpoints below.
-  }
+  const upstream = await entraConfig(env);
 
   return {
     issuer: origin,
-    authorization_endpoint: upstream.authorization_endpoint ?? `${tenant}/oauth2/v2.0/authorize`,
-    token_endpoint: upstream.token_endpoint ?? `${tenant}/oauth2/v2.0/token`,
+    // Our own endpoints, not Entra's. Advertising foreign endpoints under our
+    // own issuer is the shape of a mix-up attack, and a careful client that
+    // completes such a flow cannot reconcile the token it receives with the
+    // authorization server it recorded. Entra granted four valid tokens that
+    // Cowork then discarded before this became a proxy.
+    authorization_endpoint: `${origin}/authorize`,
+    token_endpoint: `${origin}/token`,
     scopes_supported: [...REQUIRED_SCOPES],
     response_types_supported: ['code'],
     response_modes_supported: upstream.response_modes_supported ?? ['query', 'fragment', 'form_post'],
@@ -163,6 +179,190 @@ export async function authorizationServerMetadata(requestUrl: URL, env: Env) {
     registration_endpoint: `${origin}/register`,
     service_documentation: 'https://github.com/NCM20/claude-microsoft-tasks#readme',
   };
+}
+
+/**
+ * Parameters we refuse to forward to Entra.
+ *
+ * `resource` is RFC 8707, which the MCP spec mandates clients send. Entra
+ * predates it and does not implement it; the audience is determined by the
+ * scopes instead. Forwarding it achieves nothing and risks Entra rejecting the
+ * request outright.
+ */
+const DROPPED_PARAMS = new Set(['resource']);
+
+/**
+ * Authorization endpoint. Redirects to Entra, having pinned the client ID and
+ * ensured the scopes actually name Microsoft Graph.
+ *
+ * Everything else, PKCE challenge included, passes through untouched. The
+ * proxy never sees a credential and cannot weaken the exchange: the code goes
+ * straight from Entra to the client's redirect URI without passing through here.
+ */
+export async function handleAuthorize(requestUrl: URL, env: Env): Promise<Response> {
+  if (!env.ENTRA_CLIENT_ID) {
+    return new Response('This server has no ENTRA_CLIENT_ID configured.', { status: 500 });
+  }
+
+  const upstream = await entraConfig(env);
+  const target = new URL(upstream.authorization_endpoint);
+
+  let strippedPrompt = false;
+  for (const [key, value] of requestUrl.searchParams) {
+    if (DROPPED_PARAMS.has(key)) continue;
+
+    // `prompt=consent` forces Entra to re-run consent, ignoring any grant
+    // already in place. In a tenant where user consent is disabled, that turns
+    // an already-consented app into an "approval required" wall for every
+    // non-admin, permanently. Admin consent covers every scope this server
+    // requests, so re-consent has nothing to add and cannot succeed.
+    if (key === 'prompt' && value === 'consent') {
+      strippedPrompt = true;
+      continue;
+    }
+
+    target.searchParams.set(key, value);
+  }
+  target.searchParams.set('client_id', env.ENTRA_CLIENT_ID);
+
+  // A token is only useful to us if Entra audiences it for Graph, which happens
+  // when the scopes are the fully qualified Graph ones. A client that asks for
+  // bare names, or for nothing, would otherwise get a token we cannot use.
+  const scope = requestUrl.searchParams.get('scope') ?? '';
+  if (!scope.includes('graph.microsoft.com')) {
+    target.searchParams.set('scope', REQUIRED_SCOPES.join(' '));
+  }
+
+  console.log(
+    JSON.stringify({
+      event: 'authorize',
+      redirect_uri: requestUrl.searchParams.get('redirect_uri'),
+      // The exact scopes matter: this tenant disables user consent, so any
+      // scope outside the admin grant produces an "approval required" wall
+      // rather than a usable error.
+      scope_requested: scope || '(none)',
+      scope_forwarded: target.searchParams.get('scope'),
+      scope_rewritten: !scope.includes('graph.microsoft.com'),
+      prompt: requestUrl.searchParams.get('prompt') ?? '(none)',
+      prompt_consent_stripped: strippedPrompt,
+      has_pkce: requestUrl.searchParams.has('code_challenge'),
+    }),
+  );
+
+  return Response.redirect(target.toString(), 302);
+}
+
+/**
+ * Token endpoint. Forwards the exchange to Entra and returns its response
+ * verbatim, so refresh works the same way without further help.
+ */
+export async function handleToken(request: Request, env: Env): Promise<Response> {
+  if (!env.ENTRA_CLIENT_ID) {
+    return new Response(JSON.stringify({ error: 'server_error' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json', ...corsHeaders() },
+    });
+  }
+
+  const params = new URLSearchParams();
+  const contentType = request.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(body)) {
+      if (!DROPPED_PARAMS.has(key) && value != null) params.set(key, String(value));
+    }
+  } else {
+    const form = await request.formData().catch(() => new FormData());
+    for (const [key, value] of form) {
+      if (!DROPPED_PARAMS.has(key)) params.set(key, String(value));
+    }
+  }
+  params.set('client_id', env.ENTRA_CLIENT_ID);
+
+  /*
+   * One app registration serves two client types with opposite requirements.
+   *
+   * Cowork redirects to https://claude.ai/api/mcp/auth_callback, registered
+   * under Entra's Web platform, which makes it a confidential client: omit the
+   * secret and Entra answers AADSTS7000218.
+   *
+   * Claude Code redirects to http://localhost:<port>/callback, registered under
+   * Mobile and desktop applications, which is a public client: send the secret
+   * and Entra answers AADSTS700025.
+   *
+   * The redirect URI tells us which we are dealing with, but a refresh_token
+   * grant carries no redirect URI at all. So we guess from what we have and let
+   * Entra correct us, retrying once when it says the secret was the problem.
+   */
+  const redirectUri = params.get('redirect_uri') ?? '';
+  const isLoopback = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(redirectUri);
+  const withSecret = Boolean(env.ENTRA_CLIENT_SECRET) && !isLoopback;
+
+  const upstream = await entraConfig(env);
+  let response = await postToken(upstream.token_endpoint, params, withSecret, env);
+  let text = await response.text();
+
+  if (!response.ok) {
+    const wantsSecret = text.includes('AADSTS7000218');
+    const rejectsSecret = text.includes('AADSTS700025');
+    if (wantsSecret || rejectsSecret) {
+      console.log(
+        JSON.stringify({
+          event: 'token_retry',
+          reason: wantsSecret ? 'AADSTS7000218 wants client authentication' : 'AADSTS700025 rejects client authentication',
+          retrying_with_secret: wantsSecret,
+        }),
+      );
+      response = await postToken(upstream.token_endpoint, params, wantsSecret, env);
+      text = await response.text();
+    }
+  }
+
+  // Log the outcome, never the tokens. A failure here is otherwise invisible:
+  // the client just goes quiet.
+  let summary: Record<string, unknown> = { event: 'token', status: response.status };
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    summary = response.ok
+      ? {
+          ...summary,
+          granted: true,
+          grant_type: params.get('grant_type'),
+          token_type: parsed.token_type,
+          expires_in: parsed.expires_in,
+          has_refresh_token: Boolean(parsed.refresh_token),
+          scope: parsed.scope,
+        }
+      : { ...summary, granted: false, error: parsed.error, description: String(parsed.error_description ?? '').slice(0, 200) };
+  } catch {
+    summary = { ...summary, granted: false, note: 'non-JSON response from Entra' };
+  }
+  console.log(JSON.stringify(summary));
+
+  return new Response(text, {
+    status: response.status,
+    headers: { 'content-type': 'application/json', ...corsHeaders() },
+  });
+}
+
+/** One attempt at the token endpoint, with or without client authentication. */
+async function postToken(
+  endpoint: string,
+  params: URLSearchParams,
+  withSecret: boolean,
+  env: Env,
+): Promise<Response> {
+  const body = new URLSearchParams(params);
+  if (withSecret && env.ENTRA_CLIENT_SECRET) {
+    body.set('client_secret', env.ENTRA_CLIENT_SECRET);
+  } else {
+    body.delete('client_secret');
+  }
+  return fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body,
+  });
 }
 
 /**
@@ -217,20 +417,53 @@ export async function registerClient(request: Request, env: Env): Promise<Respon
     );
   }
 
-  return new Response(
-    JSON.stringify({
-      client_id: env.ENTRA_CLIENT_ID,
-      client_id_issued_at: Math.floor(Date.now() / 1000),
-      // 0 means "does not expire", per RFC 7591.
-      client_secret_expires_at: 0,
-      redirect_uris: redirectUris,
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-      token_endpoint_auth_method: 'none',
-      client_name: 'Microsoft Planner & To Do',
-    }),
-    { status: 201, headers: { 'content-type': 'application/json', ...corsHeaders() } },
-  );
+  return new Response(JSON.stringify(clientMetadata(request, env, redirectUris)), {
+    status: 201,
+    headers: { 'content-type': 'application/json', ...corsHeaders() },
+  });
+}
+
+/**
+ * The registered client, as RFC 7591 §3.2.1 describes it.
+ *
+ * Includes the RFC 7592 management fields. They matter more than they look:
+ * a client that cannot read its registration back may treat it as having
+ * failed and register again on every connection attempt, never reaching the
+ * authorization step. The management token is a fixed sentinel rather than a
+ * credential, because the registration it guards is the same public client for
+ * everyone and there is nothing to protect.
+ */
+function clientMetadata(request: Request, env: Env, redirectUris: string[]) {
+  const origin = new URL(request.url).origin;
+  return {
+    client_id: env.ENTRA_CLIENT_ID,
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    // 0 means "does not expire", per RFC 7591.
+    client_secret_expires_at: 0,
+    redirect_uris: redirectUris,
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    application_type: 'web',
+    client_name: 'Microsoft Planner & To Do',
+    registration_client_uri: `${origin}/register/${env.ENTRA_CLIENT_ID}`,
+    registration_access_token: 'static-registration-no-management-required',
+  };
+}
+
+/** RFC 7592 read, so a client can confirm its registration still exists. */
+export function readClientRegistration(request: Request, env: Env, clientId: string): Response {
+  if (!env.ENTRA_CLIENT_ID || clientId !== env.ENTRA_CLIENT_ID) {
+    return new Response(JSON.stringify({ error: 'invalid_client_id' }), {
+      status: 404,
+      headers: { 'content-type': 'application/json', ...corsHeaders() },
+    });
+  }
+  console.log(JSON.stringify({ event: 'client_registration_read', client_id: clientId }));
+  return new Response(JSON.stringify(clientMetadata(request, env, [])), {
+    status: 200,
+    headers: { 'content-type': 'application/json', ...corsHeaders() },
+  });
 }
 
 /** Build a 401 that tells the client where to discover auth, per RFC 9728 §5.1. */

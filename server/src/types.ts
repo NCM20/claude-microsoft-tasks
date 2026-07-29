@@ -1,11 +1,17 @@
 /**
  * Shared types for the Microsoft Tasks MCP worker.
  *
- * The worker is a stateless OAuth 2.0 *resource* server. It never mints,
- * stores, or refreshes tokens. Clients authenticate directly against Microsoft
- * Entra ID and present a Microsoft Graph access token on every request, which
- * the worker forwards to Graph. Graph is the authority on whether a token is
- * valid and what it may do.
+ * The worker is a stateless OAuth 2.0 resource server *and* an authorization
+ * server proxy in front of Microsoft Entra ID. It stores no tokens and issues
+ * none of its own: `/authorize` redirects to Entra, `/token` forwards the
+ * exchange to Entra and returns the result verbatim, and every MCP request
+ * carries a Microsoft Graph access token that the worker passes straight
+ * through. Graph remains the authority on whether a token is valid and what it
+ * may do.
+ *
+ * The proxy exists because Entra cannot be pointed at directly: it has no
+ * dynamic client registration, does not implement RFC 8414, and does not
+ * advertise PKCE support, each of which stops a conforming MCP client.
  */
 
 export interface Env {
@@ -17,6 +23,19 @@ export interface Env {
    * every authorization request.
    */
   ENTRA_CLIENT_ID?: string;
+  /**
+   * Client secret for the Entra app, set with `wrangler secret put` and never
+   * committed.
+   *
+   * Registering the Cowork callback under Entra's Web platform makes the app a
+   * confidential client, so Entra demands client authentication at the token
+   * endpoint. Because this Worker proxies that exchange, the secret lives here
+   * and is never distributed: Cowork remains a public client talking to this
+   * server, and never sees it. That is the standard reason to run an OAuth
+   * proxy, and it is stronger than a bare public client, since a stolen
+   * authorization code cannot be redeemed without also holding this.
+   */
+  ENTRA_CLIENT_SECRET?: string;
   /** Graph endpoint. Override for national clouds (e.g. US Gov, 21Vianet). */
   GRAPH_BASE?: string;
   /**
@@ -53,7 +72,7 @@ export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11
 export const SERVER_INFO = {
   name: 'microsoft-tasks',
   title: 'Microsoft Planner & To Do',
-  version: '0.2.0',
+  version: '0.5.0',
 } as const;
 
 // --- JSON-RPC 2.0 ---
