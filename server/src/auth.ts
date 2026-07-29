@@ -217,20 +217,53 @@ export async function registerClient(request: Request, env: Env): Promise<Respon
     );
   }
 
-  return new Response(
-    JSON.stringify({
-      client_id: env.ENTRA_CLIENT_ID,
-      client_id_issued_at: Math.floor(Date.now() / 1000),
-      // 0 means "does not expire", per RFC 7591.
-      client_secret_expires_at: 0,
-      redirect_uris: redirectUris,
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-      token_endpoint_auth_method: 'none',
-      client_name: 'Microsoft Planner & To Do',
-    }),
-    { status: 201, headers: { 'content-type': 'application/json', ...corsHeaders() } },
-  );
+  return new Response(JSON.stringify(clientMetadata(request, env, redirectUris)), {
+    status: 201,
+    headers: { 'content-type': 'application/json', ...corsHeaders() },
+  });
+}
+
+/**
+ * The registered client, as RFC 7591 §3.2.1 describes it.
+ *
+ * Includes the RFC 7592 management fields. They matter more than they look:
+ * a client that cannot read its registration back may treat it as having
+ * failed and register again on every connection attempt, never reaching the
+ * authorization step. The management token is a fixed sentinel rather than a
+ * credential, because the registration it guards is the same public client for
+ * everyone and there is nothing to protect.
+ */
+function clientMetadata(request: Request, env: Env, redirectUris: string[]) {
+  const origin = new URL(request.url).origin;
+  return {
+    client_id: env.ENTRA_CLIENT_ID,
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    // 0 means "does not expire", per RFC 7591.
+    client_secret_expires_at: 0,
+    redirect_uris: redirectUris,
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    application_type: 'web',
+    client_name: 'Microsoft Planner & To Do',
+    registration_client_uri: `${origin}/register/${env.ENTRA_CLIENT_ID}`,
+    registration_access_token: 'static-registration-no-management-required',
+  };
+}
+
+/** RFC 7592 read, so a client can confirm its registration still exists. */
+export function readClientRegistration(request: Request, env: Env, clientId: string): Response {
+  if (!env.ENTRA_CLIENT_ID || clientId !== env.ENTRA_CLIENT_ID) {
+    return new Response(JSON.stringify({ error: 'invalid_client_id' }), {
+      status: 404,
+      headers: { 'content-type': 'application/json', ...corsHeaders() },
+    });
+  }
+  console.log(JSON.stringify({ event: 'client_registration_read', client_id: clientId }));
+  return new Response(JSON.stringify(clientMetadata(request, env, [])), {
+    status: 200,
+    headers: { 'content-type': 'application/json', ...corsHeaders() },
+  });
 }
 
 /** Build a 401 that tells the client where to discover auth, per RFC 9728 §5.1. */
