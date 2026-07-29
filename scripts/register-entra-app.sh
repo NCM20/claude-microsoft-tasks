@@ -55,7 +55,9 @@ REQUIRED_ACCESS="$(printf '[{"resourceAppId":"%s","resourceAccess":[%s]}]' \
   "${GRAPH_APP_ID}" \
   "$(IFS=,; echo "${RESOURCE_ACCESS[*]}")")"
 
-MANIFEST="$(mktemp -t entra-required-access)"
+# Explicit XXXXXX template rather than `mktemp -t <prefix>`: GNU coreutils
+# requires the placeholder, BSD does not, and both are common on macOS.
+MANIFEST="$(mktemp "${TMPDIR:-/tmp}/entra-required-access.XXXXXX")"
 trap 'rm -f "${MANIFEST}"' EXIT
 printf '%s' "${REQUIRED_ACCESS}" > "${MANIFEST}"
 

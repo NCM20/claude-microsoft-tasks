@@ -65,8 +65,12 @@ BASE=https://microsoft-tasks-mcp.<your-subdomain>.workers.dev
 # Should report ok and a tool count of 24.
 curl -s "$BASE/health"
 
-# Should list Entra as the authorization server and the five Graph scopes.
+# Should list this Worker as the authorization server and the five Graph scopes.
 curl -s "$BASE/.well-known/oauth-protected-resource/mcp"
+
+# Should return Entra's authorize and token endpoints, with S256 declared.
+# See docs/cowork-install.md for why the Worker publishes this itself.
+curl -s "$BASE/.well-known/oauth-authorization-server"
 
 # Should return 401 with a WWW-Authenticate header pointing at that metadata.
 curl -si -X POST "$BASE/mcp" \

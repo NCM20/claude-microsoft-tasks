@@ -81,6 +81,40 @@ If it fails:
 
 `npx wrangler tail` shows what the Worker received while you reproduce it.
 
+## How discovery actually works here
+
+Worth understanding before you debug anything, because it is not the obvious
+arrangement.
+
+The Worker publishes its own OAuth authorization server metadata at
+`/.well-known/oauth-authorization-server`, and the protected-resource document
+points there rather than straight at Entra. Users still authenticate against
+Microsoft; the authorization and token endpoints in that document are Entra's,
+and no token passes through the Worker during the handshake.
+
+The indirection exists because Entra cannot be discovered the way MCP clients
+look for it. Both problems were measured against this tenant, not assumed:
+
+- **Entra does not implement RFC 8414.** Of the three well-known locations an
+  MCP client probes, only `{issuer}/.well-known/openid-configuration` answers.
+  Both path-insertion forms return 404.
+- **Entra omits `code_challenge_methods_supported` from its metadata.** It
+  supports PKCE with S256 perfectly well, it just never says so. A client that
+  checks for PKCE support before starting the flow refuses to start.
+
+The Worker's document is discoverable at the plain RFC 8414 path and states
+S256 explicitly, which removes both failure modes. It deliberately publishes no
+`registration_endpoint`, since Entra has no dynamic client registration, so
+clients fall back to the `clientId` configured in `.mcp.json`.
+
+To confirm it is all still wired up:
+
+```bash
+BASE=https://microsoft-tasks-mcp.ncm-associates.workers.dev
+curl -s "$BASE/.well-known/oauth-protected-resource/mcp"   # points at $BASE
+curl -s "$BASE/.well-known/oauth-authorization-server"     # Entra endpoints, S256
+```
+
 ## A caveat worth knowing
 
 Cowork's plugin support is in beta, and Anthropic's own documentation notes that
@@ -90,7 +124,4 @@ for now, and revisit the admin-managed route once it is generally available.
 
 The exact shape of the `oauth` block in a plugin's `.mcp.json` is the one part
 of this setup taken from Anthropic's own published plugins rather than from
-reference documentation. If Cowork rejects the static `clientId` and insists on
-dynamic client registration, the fix is a small OAuth proxy in front of the
-Worker; Entra does not support dynamic registration itself. Test with one user
-before rolling out widely.
+reference documentation. Test with one user before rolling out widely.
