@@ -15,6 +15,7 @@ import {
   decodeClaims,
   extractBearer,
   protectedResourceMetadata,
+  registerClient,
   unauthorized,
 } from './auth';
 import { GraphClient } from './graph';
@@ -43,6 +44,17 @@ export default {
       url.pathname.startsWith('/.well-known/openid-configuration')
     ) {
       return json(await authorizationServerMetadata(url, env));
+    }
+
+    // RFC 7591. Answers with the one pre-registered public client; see
+    // registerClient for why this exists at all.
+    if (url.pathname === '/register') {
+      if (request.method !== 'POST') {
+        return json({ error: 'method_not_allowed', message: 'Use POST to register.' }, 405, {
+          allow: 'POST, OPTIONS',
+        });
+      }
+      return registerClient(request, env);
     }
 
     if (url.pathname === '/health') {

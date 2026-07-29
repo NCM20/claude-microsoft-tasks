@@ -78,6 +78,8 @@ If it fails:
 | `AADSTS7000218: request body must contain client_assertion or client_secret` | The app is registered as a confidential client. Remove any client secret and confirm the redirect URI sits under **Mobile and desktop applications**, not **Web**. |
 | Connected, but every tool returns 401 | The token was issued for the wrong audience. Confirm the scopes in the Worker's protected-resource metadata are the fully qualified `https://graph.microsoft.com/...` form. |
 | Connected, but tools return 403 | Permissions granted but consent not applied to this user. Re-run admin consent and have the user reconnect. |
+| `Automatic client registration isn't supported` | The Worker is not serving `/register`, or Cowork cached the metadata from before it did. Check `curl -X POST <base>/register -d '{}'` returns 201, then remove and re-add the connector so discovery runs again. As a one-off workaround, the connector's OAuth Client ID field accepts the client ID directly. |
+| `AADSTS900971` or a redirect mismatch after registration | Cowork asked for a redirect URI whose **path** is not registered. Entra ignores the port on `http://localhost` but not the path. `npx wrangler tail` logs the exact `redirect_uris` Cowork sent on every `/register` call; add that path under Mobile and desktop applications. |
 
 `npx wrangler tail` shows what the Worker received while you reproduce it.
 
@@ -103,9 +105,26 @@ look for it. Both problems were measured against this tenant, not assumed:
   checks for PKCE support before starting the flow refuses to start.
 
 The Worker's document is discoverable at the plain RFC 8414 path and states
-S256 explicitly, which removes both failure modes. It deliberately publishes no
-`registration_endpoint`, since Entra has no dynamic client registration, so
-clients fall back to the `clientId` configured in `.mcp.json`.
+S256 explicitly, which removes both failure modes.
+
+There is a third problem, found only by actually trying to connect. Entra has no
+dynamic client registration, so the honest thing is to publish no
+`registration_endpoint` at all. That was the original design, and Cowork
+rejected it outright:
+
+> Automatic client registration isn't supported by microsoft-tasks. Edit the
+> connector and add an OAuth Client ID.
+
+Cowork attempts registration first and gives up rather than falling back to the
+`clientId` declared in the plugin's `.mcp.json`. So the Worker now implements
+RFC 7591 at `/register` and answers every request with the one pre-registered
+public client.
+
+Nothing is weakened by that. The client ID was never secret, it is in this
+repository and in every authorization URL. No client secret is issued.
+Authorization still happens entirely against Entra with PKCE, which is what
+actually binds a request to the client. Someone who calls `/register` learns
+nothing they could not read out of the plugin manifest.
 
 To confirm it is all still wired up:
 
