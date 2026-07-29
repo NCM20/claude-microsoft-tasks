@@ -33,6 +33,12 @@ Consent is limited to `Tasks.ReadWrite`, `Tasks.ReadWrite.Shared`, `User.Read`,
 `User.ReadBasic.All`, and `offline_access`. None require admin consent by
 default, and none reach mail, files, calendar, or Teams messages.
 
+## For end users
+
+Send people [docs/for-users.md](docs/for-users.md). It covers installing,
+signing in, what the permissions actually mean, and what to ask. No
+infrastructure detail.
+
 ## Setup
 
 Three steps, roughly half an hour.
