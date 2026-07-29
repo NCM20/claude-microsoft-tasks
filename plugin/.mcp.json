@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "microsoft-tasks": {
+      "type": "http",
+      "url": "https://REPLACE-ME.workers.dev/mcp",
+      "oauth": {
+        "clientId": "REPLACE-WITH-ENTRA-APPLICATION-CLIENT-ID",
+        "callbackPort": 3119
+      }
+    }
+  }
+}

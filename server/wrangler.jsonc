@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "microsoft-tasks-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    // Entra tenant this server serves. Use your tenant GUID for a single-tenant
+    // rollout, or "organizations" to accept any work or school account.
+    "TENANT_ID": "organizations",
+
+    // Microsoft Graph endpoint. Change only for national clouds
+    // (US Gov: https://graph.microsoft.us/v1.0, 21Vianet: https://microsoftgraph.chinacloudapi.cn/v1.0).
+    "GRAPH_BASE": "https://graph.microsoft.com/v1.0",
+
+    // Entra login host. Change only for national clouds.
+    "LOGIN_BASE": "https://login.microsoftonline.com",
+
+    // How many Graph pages a single tool call will follow before stopping.
+    "MAX_GRAPH_PAGES": "5"
+
+    // Optional. Comma-separated tenant GUIDs allowed to call this server, as a
+    // cheap early reject. Set this when TENANT_ID is "organizations" and you
+    // want to serve only your own tenant.
+    // "ALLOWED_TENANT_IDS": "00000000-0000-0000-0000-000000000000"
+  }
+}

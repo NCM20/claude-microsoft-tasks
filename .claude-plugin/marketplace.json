@@ -1,0 +1,14 @@
+{
+  "name": "ncm-plugins",
+  "description": "NCM Associates internal plugin marketplace for Claude Cowork and Claude Code.",
+  "owner": {
+    "name": "NCM Associates"
+  },
+  "plugins": [
+    {
+      "name": "microsoft-tasks",
+      "source": "./plugin",
+      "description": "Microsoft Planner and Microsoft To Do for Claude Cowork, backed by a self-hosted Microsoft Graph MCP server."
+    }
+  ]
+}

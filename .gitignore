@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Wrangler build output and local state
+.wrangler/
+dist/
+
+# Local secrets. Never commit these; the deployed Worker holds no secrets,
+# but wrangler reads local overrides from here during development.
+.dev.vars
+.dev.vars.*
+
+# OS and editor noise
+.DS_Store
+*.log
