@@ -157,10 +157,80 @@ export async function authorizationServerMetadata(requestUrl: URL, env: Env) {
     code_challenge_methods_supported: ['S256'],
     // Public client: no secret is presented at the token endpoint.
     token_endpoint_auth_methods_supported: ['none'],
-    // Deliberately no registration_endpoint. Entra has no dynamic client
-    // registration, so clients must use the client ID configured in the plugin.
+    // See registerClient below. Entra has no dynamic client registration, but
+    // omitting this endpoint made Cowork refuse to connect rather than fall
+    // back to the client ID configured in the plugin.
+    registration_endpoint: `${origin}/register`,
     service_documentation: 'https://github.com/NCM20/claude-microsoft-tasks#readme',
   };
+}
+
+/**
+ * RFC 7591 dynamic client registration, answered with a fixed client.
+ *
+ * Entra has no dynamic registration and never will, so the honest response
+ * would be to omit `registration_endpoint` entirely. That was the original
+ * design, and it failed in practice: Cowork attempts registration first and,
+ * finding no endpoint, refuses the connection with "Automatic client
+ * registration isn't supported" rather than using the `clientId` declared in
+ * the plugin's `.mcp.json`.
+ *
+ * So this endpoint accepts any registration request and returns the one
+ * pre-registered public client. Nothing is weakened by that. The client ID was
+ * never secret, no client secret is issued, and authorization still happens
+ * entirely against Entra with PKCE, which is what actually binds the request to
+ * the client. A caller who "registers" gains nothing they could not have read
+ * out of the plugin manifest.
+ *
+ * The requested redirect URIs are logged, because they are the one thing that
+ * has to match the app registration and the only part we cannot control.
+ */
+export async function registerClient(request: Request, env: Env): Promise<Response> {
+  let body: { redirect_uris?: unknown; client_name?: unknown } = {};
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    // An empty or unparseable body still gets the same fixed client back.
+  }
+
+  const redirectUris = Array.isArray(body.redirect_uris)
+    ? body.redirect_uris.filter((u): u is string => typeof u === 'string')
+    : [];
+
+  console.log(
+    JSON.stringify({
+      event: 'client_registration',
+      client_name: typeof body.client_name === 'string' ? body.client_name : undefined,
+      redirect_uris: redirectUris,
+      note: 'these must be registered on the Entra app; it ignores the port on http://localhost but not the path',
+    }),
+  );
+
+  if (!env.ENTRA_CLIENT_ID) {
+    return new Response(
+      JSON.stringify({
+        error: 'invalid_request',
+        error_description:
+          'This server has no ENTRA_CLIENT_ID configured, so it cannot issue a client. Set it in wrangler.jsonc and redeploy.',
+      }),
+      { status: 500, headers: { 'content-type': 'application/json', ...corsHeaders() } },
+    );
+  }
+
+  return new Response(
+    JSON.stringify({
+      client_id: env.ENTRA_CLIENT_ID,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      // 0 means "does not expire", per RFC 7591.
+      client_secret_expires_at: 0,
+      redirect_uris: redirectUris,
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      client_name: 'Microsoft Planner & To Do',
+    }),
+    { status: 201, headers: { 'content-type': 'application/json', ...corsHeaders() } },
+  );
 }
 
 /** Build a 401 that tells the client where to discover auth, per RFC 9728 §5.1. */

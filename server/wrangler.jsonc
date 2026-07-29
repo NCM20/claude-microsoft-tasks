@@ -19,6 +19,13 @@
     // wiped on the next deploy.
     "TENANT_ID": "organizations",
 
+    // Application (client) ID of the "NCM Claude Tasks" Entra registration.
+    // Committed on purpose: a public client's ID is not a secret, it appears in
+    // the browser URL on every authorization request, and it is already in the
+    // plugin's .mcp.json. The /register endpoint hands this back to clients
+    // that insist on dynamic registration.
+    "ENTRA_CLIENT_ID": "58617f76-7cf7-4324-8b0c-b74c951e356d",
+
     // Microsoft Graph endpoint. Change only for national clouds
     // (US Gov: https://graph.microsoft.us/v1.0, 21Vianet: https://microsoftgraph.chinacloudapi.cn/v1.0).
     "GRAPH_BASE": "https://graph.microsoft.com/v1.0",

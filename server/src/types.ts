@@ -11,6 +11,12 @@
 export interface Env {
   /** Entra tenant the server is scoped to. A GUID, or `organizations` / `common`. */
   TENANT_ID: string;
+  /**
+   * Application (client) ID of the Entra app registration users sign in
+   * against. Not a secret: a public client's ID appears in the browser URL on
+   * every authorization request.
+   */
+  ENTRA_CLIENT_ID?: string;
   /** Graph endpoint. Override for national clouds (e.g. US Gov, 21Vianet). */
   GRAPH_BASE?: string;
   /**
