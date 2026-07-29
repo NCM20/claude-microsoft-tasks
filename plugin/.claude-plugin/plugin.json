@@ -1,7 +1,7 @@
 {
   "name": "microsoft-tasks",
   "description": "Work with Microsoft Planner boards and Microsoft To Do lists: review what is on your plate, capture tasks from meetings and email, triage a team board, and keep due dates honest.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "NCM Associates"
   },

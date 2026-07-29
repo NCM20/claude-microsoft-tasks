@@ -43,10 +43,17 @@ export const REQUIRED_SCOPES = [
 /** MCP protocol revisions this server can speak, newest first. */
 export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'] as const;
 
+/**
+ * Version of the Worker, deliberately tracked separately from the plugin's
+ * version in plugin.json. The two ship independently: server fixes reach users
+ * on deploy without a plugin update, and skill changes reach them on plugin
+ * update without a deploy. Keeping one number for both made it impossible to
+ * tell which half was stale.
+ */
 export const SERVER_INFO = {
   name: 'microsoft-tasks',
   title: 'Microsoft Planner & To Do',
-  version: '0.1.0',
+  version: '0.2.0',
 } as const;
 
 // --- JSON-RPC 2.0 ---
