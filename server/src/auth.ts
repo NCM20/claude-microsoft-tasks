@@ -207,8 +207,21 @@ export async function handleAuthorize(requestUrl: URL, env: Env): Promise<Respon
   const upstream = await entraConfig(env);
   const target = new URL(upstream.authorization_endpoint);
 
+  let strippedPrompt = false;
   for (const [key, value] of requestUrl.searchParams) {
-    if (!DROPPED_PARAMS.has(key)) target.searchParams.set(key, value);
+    if (DROPPED_PARAMS.has(key)) continue;
+
+    // `prompt=consent` forces Entra to re-run consent, ignoring any grant
+    // already in place. In a tenant where user consent is disabled, that turns
+    // an already-consented app into an "approval required" wall for every
+    // non-admin, permanently. Admin consent covers every scope this server
+    // requests, so re-consent has nothing to add and cannot succeed.
+    if (key === 'prompt' && value === 'consent') {
+      strippedPrompt = true;
+      continue;
+    }
+
+    target.searchParams.set(key, value);
   }
   target.searchParams.set('client_id', env.ENTRA_CLIENT_ID);
 
@@ -224,7 +237,14 @@ export async function handleAuthorize(requestUrl: URL, env: Env): Promise<Respon
     JSON.stringify({
       event: 'authorize',
       redirect_uri: requestUrl.searchParams.get('redirect_uri'),
+      // The exact scopes matter: this tenant disables user consent, so any
+      // scope outside the admin grant produces an "approval required" wall
+      // rather than a usable error.
+      scope_requested: scope || '(none)',
+      scope_forwarded: target.searchParams.get('scope'),
       scope_rewritten: !scope.includes('graph.microsoft.com'),
+      prompt: requestUrl.searchParams.get('prompt') ?? '(none)',
+      prompt_consent_stripped: strippedPrompt,
       has_pkce: requestUrl.searchParams.has('code_challenge'),
     }),
   );
@@ -258,6 +278,12 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
   }
   params.set('client_id', env.ENTRA_CLIENT_ID);
+
+  // The Cowork callback is registered under Entra's Web platform, which makes
+  // this a confidential client, so Entra rejects an unauthenticated exchange
+  // with AADSTS7000218. The secret is added here and never leaves the Worker;
+  // the caller stays a public client and never sees it.
+  if (env.ENTRA_CLIENT_SECRET) params.set('client_secret', env.ENTRA_CLIENT_SECRET);
 
   const upstream = await entraConfig(env);
   const response = await fetch(upstream.token_endpoint, {

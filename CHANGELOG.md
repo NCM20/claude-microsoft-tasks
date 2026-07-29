@@ -8,6 +8,43 @@ independently: a Worker fix reaches users on deploy with no plugin update, and a
 skill change reaches them on plugin update with no deploy. Each entry below says
 which half moved.
 
+## Worker 0.4.0 - 2026-07-29
+
+Everything here was found by driving the real Cowork client against a real
+tenant. None of it was predictable from the specifications.
+
+### Fixed
+
+- **Worker**: strip `prompt=consent` before redirecting to Entra. Cowork sends
+  it on every authorization request, which tells Entra to re-run consent and
+  ignore any existing grant. In a tenant where user consent is disabled, that
+  turns an already-consented app into a permanent "admin approval required" wall
+  for every non-admin. Admin consent already covers every scope this server
+  requests, so re-consent has nothing to add and, for a non-admin, cannot
+  succeed.
+
+- **Worker**: authenticate the token exchange with `ENTRA_CLIENT_SECRET`.
+  Registering the Cowork callback under Entra's Web platform makes the app a
+  confidential client, and Entra rejects an unauthenticated exchange with
+  `AADSTS7000218`. Because the Worker proxies the exchange, the secret stays in
+  the Worker's encrypted secret store and is never distributed. Callers remain
+  public clients that never see it, and an intercepted authorization code can no
+  longer be redeemed on its own.
+
+  Note for anyone testing this: an invalid authorization code returns
+  `AADSTS9002313` whether or not client authentication would have succeeded,
+  because Entra validates the code first. That test cannot confirm this fix.
+
+### Added
+
+- **Entra**: `openid`, `profile`, and `email` to the app registration and the
+  admin grant. Not the cause of the consent wall, which was `prompt=consent`,
+  but harmless and avoids a failure if a client ever requests them. They convey
+  no data access beyond `User.Read`.
+
+- **Worker**: log the requested and forwarded scopes, and the `prompt` value, on
+  every authorize. This is what identified `prompt=consent`.
+
 ## Worker 0.3.0 - 2026-07-29
 
 The Worker is now a full OAuth authorization server proxy rather than only a

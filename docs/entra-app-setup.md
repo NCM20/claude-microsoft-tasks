@@ -91,8 +91,30 @@ working. See [Running without directory lookup](#running-without-directory-looku
 10. → **Grant admin consent for _your tenant_**. Confirm every row shows
    "Granted".
 
-Do not create a client secret. If one exists, the app is a confidential client
-and the desktop flow will not work.
+11. → **Certificates & secrets** → New client secret. Copy the value once; it is
+    never shown again. Store it on the Worker with:
+
+    ```bash
+    cd server && npx wrangler secret put ENTRA_CLIENT_SECRET
+    ```
+
+Registering the Cowork callback under **Web** makes this a confidential client,
+so Entra requires client authentication at the token endpoint and rejects an
+unauthenticated exchange with `AADSTS7000218`.
+
+That is fine here, and better than the alternative, because the Worker proxies
+the token exchange. The secret lives only in the Worker's encrypted secret
+store. It is never committed, never sent to a client, and never distributed to a
+user's machine. Cowork remains a public client talking to the Worker's own
+authorization server and never sees it.
+
+It also strengthens the flow: an intercepted authorization code cannot be
+redeemed by anyone who does not also hold the secret, which was not true when
+the app was a bare public client.
+
+Rotate it with `az ad app credential reset --id <app-id> --append`, then run
+`wrangler secret put ENTRA_CLIENT_SECRET` again. Worker secrets survive
+deploys, so this is independent of the release cycle.
 
 ## Scripted alternative
 
