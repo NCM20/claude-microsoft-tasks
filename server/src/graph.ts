@@ -29,7 +29,10 @@ export class GraphError extends Error {
   get guidance(): string {
     switch (this.status) {
       case 401:
-        return 'The Microsoft 365 sign-in has expired or was revoked. Ask the user to reconnect the Microsoft Planner & To Do connector.';
+        // Microsoft To Do answers 401, not 403, when the token simply lacks the
+        // Tasks scopes, so an expired sign-in is only one of two explanations
+        // and blaming it outright sends people down the wrong path.
+        return 'Microsoft 365 rejected the token. Either the sign-in expired or was revoked, or it was issued without the Tasks permissions this call needs. Ask the user to reconnect the Microsoft Planner & To Do connector. If reconnecting does not help, the app registration is missing consent for Tasks.ReadWrite.';
       case 403:
         return 'Microsoft 365 refused this operation. The signed-in user may lack access to this plan or list, or the app was not granted the required permission.';
       case 404:

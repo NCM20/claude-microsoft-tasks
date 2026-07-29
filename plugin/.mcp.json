@@ -2,9 +2,9 @@
   "mcpServers": {
     "microsoft-tasks": {
       "type": "http",
-      "url": "https://REPLACE-ME.workers.dev/mcp",
+      "url": "https://microsoft-tasks-mcp.ncm-associates.workers.dev/mcp",
       "oauth": {
-        "clientId": "REPLACE-WITH-ENTRA-APPLICATION-CLIENT-ID",
+        "clientId": "58617f76-7cf7-4324-8b0c-b74c951e356d",
         "callbackPort": 3119
       }
     }
