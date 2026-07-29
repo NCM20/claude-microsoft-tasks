@@ -10,6 +10,7 @@
 import {
   AuthError,
   assertTenantAllowed,
+  authorizationServerMetadata,
   corsHeaders,
   decodeClaims,
   extractBearer,
@@ -32,6 +33,16 @@ export default {
     // RFC 9728 clients probe both the bare path and the resource-suffixed one.
     if (url.pathname.startsWith('/.well-known/oauth-protected-resource')) {
       return json(protectedResourceMetadata(url, env));
+    }
+
+    // RFC 8414, plus the OpenID Connect path some clients try instead. Both
+    // serve the same document. See authorizationServerMetadata for why this
+    // Worker publishes it rather than deferring to Entra.
+    if (
+      url.pathname.startsWith('/.well-known/oauth-authorization-server') ||
+      url.pathname.startsWith('/.well-known/openid-configuration')
+    ) {
+      return json(await authorizationServerMetadata(url, env));
     }
 
     if (url.pathname === '/health') {
