@@ -1,0 +1,64 @@
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+# Deliberately never runs on pull_request. Fork PRs would otherwise execute
+# untrusted code in a job that has the Cloudflare credentials in scope.
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install
+        working-directory: server
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: server
+        run: npx tsc --noEmit
+
+      - name: Deploy
+        working-directory: server
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Passed in rather than committed, so the tenant GUID stays out of a
+          # public repository. Referenced through the environment rather than
+          # interpolated into the run line, to keep it out of the command log.
+          ENTRA_TENANT_ID: ${{ secrets.ENTRA_TENANT_ID }}
+        run: |
+          if [ -z "$ENTRA_TENANT_ID" ]; then
+            echo "ENTRA_TENANT_ID secret is not set. Add it under Settings -> Secrets and variables -> Actions." >&2
+            exit 1
+          fi
+          npx wrangler deploy --var TENANT_ID:"$ENTRA_TENANT_ID"
+
+      - name: Smoke test
+        run: |
+          # The deployed Worker should answer /health without a token.
+          URL="${{ vars.WORKER_URL }}"
+          if [ -z "$URL" ]; then
+            echo "WORKER_URL variable not set, skipping smoke test."
+            exit 0
+          fi
+          curl -sfS "$URL/health" | tee /dev/stderr | grep -q '"status":"ok"'

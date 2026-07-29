@@ -10,31 +10,52 @@ credentials: tokens arrive on each request and are forwarded to Microsoft Graph.
 - The tenant ID from [Entra app registration](entra-app-setup.md).
 - Node 20 or later.
 
-## Deploy
+## Deploy from GitHub Actions
+
+This is the normal path. `.github/workflows/deploy.yml` typechecks and deploys
+on every push to `main` that touches `server/`, and can be run by hand from the
+Actions tab.
+
+Add three repository secrets under **Settings → Secrets and variables →
+Actions**:
+
+| Secret | Value |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | A Cloudflare API token with the **Edit Cloudflare Workers** template |
+| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID, from the Workers dashboard sidebar |
+| `ENTRA_TENANT_ID` | The directory (tenant) ID from [Entra app registration](entra-app-setup.md) |
+
+Optionally add a repository **variable** (not a secret) named `WORKER_URL`, set
+to the deployed origin. The workflow then smoke-tests `/health` after each
+deploy instead of assuming success.
+
+The tenant GUID is passed at deploy time rather than committed, which is why
+`wrangler.jsonc` still says `organizations`. Do not "fix" that value in the file
+and do not set it as a plaintext variable in the Cloudflare dashboard: a
+`wrangler deploy` replaces dashboard variables with whatever the config file
+declares, so a dashboard value disappears on the next deploy without warning.
+
+The workflow never runs on `pull_request`. A fork PR would otherwise get to
+execute arbitrary code in a job holding your Cloudflare token.
+
+## Deploy by hand
+
+For the first deploy, or when you want to watch it happen:
 
 ```bash
 cd server
 npm install
-```
-
-Set your tenant ID in `wrangler.jsonc`:
-
-```jsonc
-"vars": {
-  "TENANT_ID": "00000000-0000-0000-0000-000000000000"
-}
-```
-
-Using your tenant GUID rather than `organizations` means Entra will only ever
-issue tokens for your own directory, which is one fewer thing to get wrong.
-
-```bash
-npx wrangler deploy
+npx wrangler login
+npx wrangler deploy --var TENANT_ID:"<your-tenant-guid>"
 ```
 
 Wrangler prints the deployed URL, something like
 `https://microsoft-tasks-mcp.<your-subdomain>.workers.dev`. The MCP endpoint is
 that URL plus `/mcp`.
+
+Passing the tenant GUID rather than leaving `organizations` means Entra will
+only ever issue tokens for your own directory, which is one fewer thing to get
+wrong. Omit `--var` for local `wrangler dev` and the default is fine.
 
 ## Verify
 
@@ -83,7 +104,7 @@ Set in `wrangler.jsonc` under `vars`.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TENANT_ID` | `organizations` | Entra tenant. Use your tenant GUID. |
+| `TENANT_ID` | `organizations` | Entra tenant. Supplied at deploy time from the `ENTRA_TENANT_ID` secret rather than committed. |
 | `GRAPH_BASE` | `https://graph.microsoft.com/v1.0` | Graph endpoint. Change only for national clouds. |
 | `LOGIN_BASE` | `https://login.microsoftonline.com` | Entra login host. Change only for national clouds. |
 | `MAX_GRAPH_PAGES` | `5` | Pages of Graph results a single tool call will follow. |

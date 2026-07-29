@@ -82,6 +82,7 @@ Stated plainly because the skills tell Claude to say so rather than improvise:
 
 ```
 .claude-plugin/marketplace.json   Marketplace manifest, so this repo installs directly
+.github/workflows/deploy.yml      Typecheck and deploy the Worker on push to main
 plugin/                           The Cowork plugin
   .claude-plugin/plugin.json      Plugin manifest
   .mcp.json                       Connector definition, needs your URL and client ID

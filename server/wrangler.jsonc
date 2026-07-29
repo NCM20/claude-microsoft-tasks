@@ -7,8 +7,16 @@
     "enabled": true
   },
   "vars": {
-    // Entra tenant this server serves. Use your tenant GUID for a single-tenant
-    // rollout, or "organizations" to accept any work or school account.
+    // Entra tenant this server serves. Left as "organizations" on purpose so
+    // that no tenant-specific identifier lives in a public repository.
+    //
+    // CI overrides it at deploy time from the ENTRA_TENANT_ID GitHub secret:
+    //     wrangler deploy --var TENANT_ID:"$ENTRA_TENANT_ID"
+    //
+    // Do not set the real GUID here, and do not set it as a plaintext variable
+    // in the Cloudflare dashboard: `wrangler deploy` replaces dashboard vars
+    // with whatever this file declares, so a dashboard value would be silently
+    // wiped on the next deploy.
     "TENANT_ID": "organizations",
 
     // Microsoft Graph endpoint. Change only for national clouds
